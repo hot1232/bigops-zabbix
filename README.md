@@ -12,9 +12,4 @@
 2、并且用include/phpCAS/CAS/Client.php.bak覆盖include/phpCAS/CAS/Client.php<br>
 记得先备份<br>
 
-**备注：制作patch**<br>
-移动文件conf/zabbix.conf.php出要打patch的目录，然后执行命令，这里的顺序是旧目录在前<br>
->diff -Nuar old new > zabbix-x.x.x.patch<br>
-
-移动文件conf/zabbix.conf.php回原处<br>
 
