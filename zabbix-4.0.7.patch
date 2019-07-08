@@ -53,14 +53,14 @@ diff -Naru zabbix407src/app/views/layout.htmlpage.php zabbix407/app/views/layout
  
 diff -Naru zabbix407src/conf/sso.conf.php zabbix407/conf/sso.conf.php
 --- zabbix407src/conf/sso.conf.php	1970-01-01 08:00:00.000000000 +0800
-+++ zabbix407/conf/sso.conf.php	2019-05-30 12:02:36.369180981 +0800
++++ zabbix407/conf/sso.conf.php	2019-07-08 12:14:08.152442245 +0800
 @@ -0,0 +1,105 @@
 +<?php
 +
-+$SALT = 'xxxxxxxxxxxxxxxxxxxxxxxxxx';
++$SALT = 'your_salt';
 +
 +#http的cas用这里
-+$SSO_SERVER_DOMAIN = 'sso.bigops.cn';
++$SSO_SERVER_DOMAIN = 'sso.bigops.com';
 +$SSO_SERVER_PORT = 80;
 +$SSO_SERVER_URI = '/signin';
 +$SSO_LOGIN_URL = 'http://'. $SSO_SERVER_DOMAIN .'/signin/login';
@@ -72,7 +72,7 @@ diff -Naru zabbix407src/conf/sso.conf.php zabbix407/conf/sso.conf.php
 +    . '/sso.php';
 +
 +#https的cas用这里
-+//$SSO_SERVER_DOMAIN = 'sso.bigops.cn';
++//$SSO_SERVER_DOMAIN = 'sso.bigops.com';
 +//$SSO_SERVER_PORT = 443;
 +//$SSO_SERVER_URI = '/signin';
 +//$SSO_LOGIN_URL = 'https://'. $SSO_SERVER_DOMAIN .'/signin/login';
@@ -16218,8 +16218,8 @@ diff -Naru zabbix407src/index.php zabbix407/index.php
  	redirect('index_http.php');
 diff -Naru zabbix407src/sso.php zabbix407/sso.php
 --- zabbix407src/sso.php	1970-01-01 08:00:00.000000000 +0800
-+++ zabbix407/sso.php	2019-05-30 11:55:26.000000000 +0800
-@@ -0,0 +1,380 @@
++++ zabbix407/sso.php	2019-06-29 11:30:57.608183518 +0800
+@@ -0,0 +1,354 @@
 +<?php
 +/*
 +** Zabbix
@@ -16273,7 +16273,7 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +        ));
 +
 +        $password = md5($ssoInfo['id'].$ssoInfo['account'].$SALT,false);
-+        $usergrpid = $ZBX_USER_SSO_GROUP_ID;
++        //$usergrpid = $ZBX_USER_SSO_GROUP_ID;
 +
 +        $name = empty($ssoInfo['name']) ? '' : $ssoInfo['name'];
 +        $email = empty($ssoInfo['email']) ? '' : $ssoInfo['email'];
@@ -16286,35 +16286,54 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +
 +        //@file_put_contents(dirname(__FILE__) . '/log/log_'.date("Y-m-d").'.log', date("Y-m-d H:i:s") . "\t" . "INSERT INTO users (userid, alias, `name`, `passwd`,surname,url,autologin,autologout,lang,refresh,type,theme,attempt_failed,attempt_ip,attempt_clock,rows_per_page) VALUES ('{$userid}','{$alias}', '{$name}', '{$password}','','',0,0,'en_GB','30',1,'default',0,'0.0.0.0',0,50)" . "\n", FILE_APPEND);
 +
++        //关闭Guests用户组
++        DBexecute("UPDATE usrgrp set users_status = '1', gui_access = '3',debug_mode = '0' WHERE name = 'Guests'");
++
++        //如果是新用户，就添加用户到数据库并添加到Guests用户组
 +        if($ssoInfo){
-+            /**
-+             * 如果是新用户，是先检查sso group是不是enable的，如果不是就强制enable
-+             * 如果是已存在用户，做检查：先检查用户所在的所有组有没有disable的，如果就有报错，昨天你做的那个页面，
-+             * 如果没有 insert
-+             */
-+            //是否为新用户
-+            $is_new_user = false;
-+            //如果是是新用户，就新加一个用户到数据库
++            //$is_new_user = false;
 +            if(!$userInfo){
 +                $userid = getUserID();
-+                DBexecute("INSERT INTO users (userid, alias, `name`, `passwd`,surname,url,autologin,autologout,lang,refresh,type,theme,attempt_failed,attempt_ip,attempt_clock,rows_per_page) VALUES ('{$userid}','{$alias}', '{$name}', '{$password}','','',0,0,'en_GB','30s',1,'default',0,'0.0.0.0',0,50)");
++                //添加新用户到数据库
++                DBexecute("INSERT INTO users (userid, alias, `name`, `passwd`,surname,url,autologin,autologout,lang,refresh,type,theme,attempt_failed,attempt_ip,attempt_clock,rows_per_page) VALUES ('{$userid}','{$alias}','{$name}','{$password}','','',0,0,'en_GB','30s',1,'default',0,'0.0.0.0',0,50)");
++                
 +                $userInfo = DBfetch(DBselect(
 +                    'SELECT u.userid,u.attempt_failed,u.attempt_clock,u.attempt_ip'.
 +                    ' FROM users u'.
 +                    ' WHERE u.alias='.zbx_dbstr($alias)
 +                ));
-+                $is_new_user = true;
-+            //如果不是新用户，只更新一下admin密码 
++           
++                //把新用户放到Guest组
++                $groupid = getUserGroupID();
++                $usrgrpidInfo = DBfetch(DBselect("SELECT usrgrpid FROM usrgrp WHERE name = 'Guests'"));
++                $usrgrpid = $usrgrpidInfo['usrgrpid'];
++                $userid = $userInfo['userid'];
++                DBexecute("INSERT INTO users_groups (id, usrgrpid, userid) VALUES ('{$groupid}','{$usrgrpid}','{$userid}')");
++                echo $ERR_PAGE_HTML;
++                exit();
++                //$is_new_user = true; 
 +            }else{
 +                $userid = $userInfo['userid'];
++                //检查用户是否在Disable组，如果在就退出
++                $userDisabledGroup = DBfetch(DBselect("SELECT users_groups.usrgrpid,users_groups.userid,usrgrp.users_status FROM users_groups 
++                LEFT JOIN usrgrp ON users_groups.usrgrpid = usrgrp.usrgrpid
++                WHERE usrgrp.users_status = 1 AND users_groups.userid = '{$userid}'"));
++                //如果存在就报错并退出
++                if($userDisabledGroup){
++                    echo $ERR_PAGE_HTML;
++                    exit();
++                }
++
++                //登录用户是admin登录，判断media_type是否存在email、mobile、weixin、dingding，不存在就创建
 +                $_type_value = "";
 +                if($alias == 'admin'){
 +                    $_type_value = ", type='3' ";
-+                    //判断是否存在 media_type Mobile & weixin & dingding
 +                    checkMediaType();
 +                }
-+                $_up_user_sql = "UPDATE users set `name`='{$name}', `passwd` = '{$password}' {$_type_value} WHERE alias = '{$alias}'";
-+                DBexecute($_up_user_sql);
++
++                //更新用户密码
++                $_update_user_sql = "UPDATE users set `name`='{$name}', `passwd` = '{$password}' {$_type_value} WHERE alias = '{$alias}'";
++                DBexecute($_update_user_sql);
 +            }
 +        }
 +
@@ -16323,10 +16342,10 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +        //更新用户media
 +        foreach($mediaInfo as $key => $media){
 +            switch($key){
-+                case 'Email':
++                case 'email':
 +                    $sendto = $email;
 +                    break;
-+                case 'Mobile':
++                case 'mobile':
 +                    $sendto = $mobile;
 +                    break;
 +                case 'weixin':
@@ -16345,44 +16364,12 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +                //update
 +                $mediaSql = "UPDATE media SET sendto='{$sendto}', severity='63' WHERE `mediaid` = '{$userMedia['mediaid']}'";
 +            }
-+            # 判断 如果media 数据不为空的时候执行sql 否则不执行
++            # 判断如果media数据不为空的时候执行sql,否则不执行
 +            if(!empty($sendto)){
 +                DBexecute($mediaSql);
 +            }
 +        }
 +        //end media
-+
-+        //init usergroup
-+        $group_check_sql = "SELECT * FROM usrgrp WHERE usrgrpid='{$ZBX_USER_SSO_GROUP_ID}'";
-+        $group_check = DBfetch(DBselect($group_check_sql));
-+        if(!$group_check){
-+            DBexecute("INSERT INTO usrgrp (usrgrpid, `name`, gui_access, users_status, debug_mode) VALUES ('{$ZBX_USER_SSO_GROUP_ID}', 'sso group', '0', '0', '1')");
-+        }
-+        $_group_status = DBfetch(DBselect($group_check_sql));
-+        // . " AND users_status = 1"
-+        if((isset($_group_status['users_status']) && $_group_status['users_status'] == 1)) {
-+            DBexecute("UPDATE usrgrp SET users_status = '0' WHERE usrgrpid = '{$ZBX_USER_SSO_GROUP_ID}'");
-+        }
-+
-+        //UPDATE USER GROUP
-+        //新用户初始化组
-+        $userGroupInfo = DBfetch(DBselect("SELECT * FROM users_groups WHERE userid = '{$userid}'"));
-+        if(!$userGroupInfo){
-+            $new_groupid = getUserGroupID();
-+            DBexecute("INSERT INTO users_groups (id, usrgrpid, userid) VALUES ('{$new_groupid}','{$usergrpid}', '{$userid}')");
-+        }
-+        //现有用户检查用户组
-+        if(!$is_new_user && empty($_REQUEST['logout'])){
-+            $userDisabledGroup = DBfetch(DBselect("SELECT users_groups.usrgrpid,users_groups.userid,usrgrp.users_status FROM users_groups 
-+                LEFT JOIN usrgrp ON users_groups.usrgrpid = usrgrp.usrgrpid
-+                WHERE usrgrp.users_status = 1 AND users_groups.userid = '{$userid}'"));
-+            //如果存在就报错
-+            if($userDisabledGroup){
-+                echo $ERR_PAGE_HTML;
-+                exit();
-+            }
-+        }
-+        //end UPDATE USER GROUP
 +
 +        if ($userInfo['attempt_failed'] >= ZBX_LOGIN_ATTEMPTS) {
 +            DBexecute('UPDATE users SET attempt_clock='.time().' WHERE alias='.zbx_dbstr($alias));
@@ -16428,19 +16415,33 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +    exit();
 +}
 +
-+/**
-+ * Email Mobile weixin dingding mediatypeid
-+ */
++
++function getUserID(){
++    $maxid = DBfetch(DBselect("SELECT max(userid) AS id FROM users"));
++    return intval($maxid['id']) + 1;
++}
++
++function getUserGroupID(){
++    $maxid = DBfetch(DBselect("SELECT max(id) AS id FROM users_groups"));
++    return intval($maxid['id']) + 1;
++}
++
++function getMediaID(){
++    $maxid = DBfetch(DBselect("SELECT max(mediaid) AS id FROM media"));
++    return intval($maxid['id']) + 1;
++}
++
++//email mobile weixin dingding mediatypeid
 +function getMediaInfo(){
-+    $media = DBfetchArray(DBselect("SELECT mediatypeid,description FROM media_type WHERE description = 'Email' OR description = 'Mobile' OR description = 'weixin' OR description = 'dingding'"));
++    $media = DBfetchArray(DBselect("SELECT mediatypeid,description FROM media_type WHERE description = 'email' OR description = 'mobile' OR description = 'weixin' OR description = 'dingding'"));
 +    $mediaInfo = array();
 +    if(is_array($media)){
 +        foreach ($media as $item){
-+            if($item['description'] == 'Email'){
-+                $mediaInfo['Email'] = $item['mediatypeid'];
++            if($item['description'] == 'email'){
++                $mediaInfo['email'] = $item['mediatypeid'];
 +            }
-+            if($item['description'] == 'Mobile'){
-+                $mediaInfo['Mobile'] = $item['mediatypeid'];
++            if($item['description'] == 'mobile'){
++                $mediaInfo['mobile'] = $item['mediatypeid'];
 +            }
 +            if($item['description'] == 'weixin'){
 +                $mediaInfo['weixin'] = $item['mediatypeid'];
@@ -16453,23 +16454,16 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +    return $mediaInfo;
 +}
 +
-+function getUserID(){
-+    $maxid = DBfetch(DBselect("SELECT max(userid) AS id FROM users"));
-+    return intval($maxid['id']) + 1;
-+}
-+
-+function getMediaID(){
-+    $maxid = DBfetch(DBselect("SELECT max(mediaid) AS id FROM media"));
-+    return intval($maxid['id']) + 1;
-+}
-+
 +function checkMediaType(){
-+    $info = DBfetchArray(DBselect("SELECT * FROM media_type WHERE description = 'Mobile' OR description = 'weixin' OR description = 'dingding'"));
-+    $hasMobile = $hasweixin = $hasdingding = false;
++    $info = DBfetchArray(DBselect("SELECT * FROM media_type WHERE description = 'email' OR description = 'mobile' OR description = 'weixin' OR description = 'dingding'"));
++    $hasemail = $hasmobile = $hasweixin = $hasdingding = false;
 +    if(is_array($info)){
 +        foreach($info as $item){
-+            if($item['description'] == 'Mobile'){
-+                $hasMobile = true;
++            if($item['description'] == 'email'){
++                $hasemail = true;
++            }
++            if($item['description'] == 'mobile'){
++                $hasmobile = true;
 +            }
 +            if($item['description'] == 'weixin'){
 +                $hasweixin = true;
@@ -16480,37 +16474,14 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +        }
 +    }
 + 
-+    $data1 = array (
-+        'mediatypeid' => '4',
-+        'type' => '1',
-+        'description' => 'weixin',
++     $data = array (
++        'mediatypeid' => '',
++        'type' => '',
++        'description' => '',
 +        'smtp_server' => '',
 +        'smtp_helo' => '',
 +        'smtp_email' => '',
-+        'exec_path' => 'weixin.sh',
-+        'gsm_modem' => '',
-+        'username' => '',
-+        'passwd' => '',
-+        'status' => '0',
-+        'smtp_port' => '25',
-+        'smtp_security' => '0',
-+        'smtp_verify_peer' => '0',
-+        'smtp_verify_host' => '0',
-+        'smtp_authentication' => '0',
-+        'exec_params' => '',
-+        'maxsessions' => '1',
-+        'maxattempts' => '3',
-+        'attempt_interval' => '10s',
-+    );
-+ 
-+     $data2 = array (
-+        'mediatypeid' => '5',
-+        'type' => '1',
-+        'description' => 'dingding',
-+        'smtp_server' => '',
-+        'smtp_helo' => '',
-+        'smtp_email' => '',
-+        'exec_path' => 'dingding.sh',
++        'exec_path' => '',
 +        'gsm_modem' => '',
 +        'username' => '',
 +        'passwd' => '',
@@ -16526,20 +16497,33 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +        'attempt_interval' => '10s',
 +    );
 +
-+    if(!$hasMobile){
-+        //添加mobile type
++    if(!$hasemail){
++        $email = $data;
++        $email['mediatypeid'] = getMediaTypeID();
++        $email['type'] = '0';
++        $email['description'] = 'email';
++        $email['smtp_server'] = 'localhost';
++        $email['smtp_helo'] = 'localhost';
++        $email['smtp_email'] = 'zabbix@localhost';
++        $email['smtp_port'] = '25';
++        $email_sql = mdSql($email);
++        DBexecute($email_sql);
++    }
++
++    if(!$hasmobile){
 +        $mobile = $data;
 +        $mobile['mediatypeid'] = getMediaTypeID();
-+        $mobile['description'] = 'Mobile';
++        $mobile['type'] = '1';
++        $mobile['description'] = 'mobile';
 +        $mobile['exec_path'] = 'mobile.sh';
 +        $mobile_sql = mdSql($mobile);
 +        DBexecute($mobile_sql);
 +    }
 +
 +    if(!$hasweixin){
-+        //添加weixin type
-+        $weixin = $data1;
++        $weixin = $data;
 +        $weixin['mediatypeid'] = getMediaTypeID();
++        $weixin['type'] = '1';
 +        $weixin['description'] = 'weixin';
 +        $weixin['exec_path'] = 'weixin.sh';
 +        $weixin_sql = mdSql($weixin);
@@ -16547,9 +16531,9 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +    }
 +    
 +    if(!$hasdingding){
-+        //添加dingding type
-+        $dingding = $data2;
++        $dingding = $data;
 +        $dingding['mediatypeid'] = getMediaTypeID();
++        $dingding['type'] = '1';
 +        $dingding['description'] = 'dingding';
 +        $dingding['exec_path'] = 'dingding.sh';
 +        $dingding_sql = mdSql($dingding);
@@ -16569,21 +16553,13 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +    $sql .= '(\'' . implode('\',\'', $values) . '\')';
 +    return $sql;
 +    }
-+    
++
 +function getMediaTypeID(){
 +    $maxid = DBfetch(DBselect("SELECT max(mediatypeid) AS id FROM media_type"));
 +    return intval($maxid['id']) + 1;
 +}
 +
-+function getUserGroupID(){
-+    $maxid = DBfetch(DBselect("SELECT max(id) AS id FROM users_groups"));
-+    return intval($maxid['id']) + 1;
-+}
-+
-+/**
-+ * 构建跳转
-+ * @return string
-+ */
++//构建跳转return string
 +function buildGotoUrl(){
 +    $goto_url = empty($_REQUEST['request']) ? '/' : ('/' . $_REQUEST['request']);
 +    # JasonLee mod: 兼容各种参数
@@ -16597,8 +16573,6 @@ diff -Naru zabbix407src/sso.php zabbix407/sso.php
 +    }
 +    return $goto_url;
 +}
-+
-+
 +
 diff -Naru zabbix407src/styles/blue-theme.css zabbix407/styles/blue-theme.css
 --- zabbix407src/styles/blue-theme.css	2019-05-30 10:11:09.878874317 +0800
